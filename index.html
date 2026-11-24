@@ -484,6 +484,15 @@
         <strong style="font-family:'Fredoka',sans-serif;font-size:1.05rem;">🍓 Toppings & Untables favoritos</strong>
         <div id="top-extras" style="margin-top:8px;font-size:0.9rem;line-height:1.6;"></div>
       </div>
+
+      <div class="panel">
+        <strong style="font-family:'Fredoka',sans-serif;font-size:1.05rem;">📄 Reporte y Exportación</strong>
+        <div class="row">
+          <button class="secondary-btn" style="flex:1;padding:10px;" onclick="copySalesReport()">📋 Copiar Reporte</button>
+          <button class="primary-btn mint-btn" style="flex:1;margin-top:0;padding:10px;" onclick="exportSalesCSV()">⬇️ Bajar CSV</button>
+        </div>
+        <pre id="report-preview" style="margin-top:10px;background:var(--pink-pale);border:1.5px solid var(--border);border-radius:14px;padding:10px;font-family:'Quicksand',sans-serif;font-size:0.8rem;white-space:pre-wrap;color:var(--navy);"></pre>
+      </div>
     </section>
   </main>
 
@@ -548,6 +557,34 @@
     };
 
     let activeModalOrderId = null;
+
+    function formatLocalTimestamp(isoStr) {
+      if (!isoStr) return "";
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return String(isoStr);
+      return d.toLocaleString("es-MX", {
+        timeZone: "America/Mexico_City",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      });
+    }
+
+    function formatLocalTime(isoStr) {
+      if (!isoStr) return "";
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return "";
+      return d.toLocaleTimeString("es-MX", {
+        timeZone: "America/Mexico_City",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true
+      });
+    }
 
     function saveLocal() {
       localStorage.setItem("sr_orders", JSON.stringify(state.orders));
@@ -792,7 +829,7 @@
 
       const cardHTML = (o, isProg) => {
         const minsElapsed = Math.max(0, Math.floor((Date.now() - new Date(o.timestamp_creacion)) / 60000));
-        const horaCreacion = new Date(o.timestamp_creacion).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const horaCreacion = formatLocalTime(o.timestamp_creacion);
         const resta = Math.max(0, Number(o.total) - Number(o.anticipo || 0));
         const items = getOrderItems(o);
 
@@ -815,7 +852,7 @@
 
           <div class="order-meta">
             <span>🆔 ${o.id}</span>
-            <span>🕒 Tomada ${horaCreacion}</span>
+            <span>🕒 ${horaCreacion}</span>
             <span>${o.metodo_pago}</span>
             ${o.tipo_pedido === "Programado"
               ? (resta > 0
@@ -849,6 +886,7 @@
 
       document.getElementById("modal-title").textContent = `${o.cliente} (${o.id})`;
       document.getElementById("modal-body").innerHTML = `
+        <div><strong>Hora registro:</strong> ${formatLocalTimestamp(o.timestamp_creacion)}</div>
         <div><strong>Tipo:</strong> ${o.tipo_pedido}${o.hora_programada ? ` · Hora: <strong>${o.hora_programada}</strong>` : ""}</div>
         <div><strong>Pago:</strong> ${o.metodo_pago} · <strong>Total:</strong> $${o.total}</div>
         ${o.tipo_pedido === "Programado" ? `<div><strong>Anticipo:</strong> $${o.anticipo || 0} · <strong>Resta:</strong> $${resta}</div>` : ""}
@@ -884,6 +922,7 @@
       const items = getOrderItems(o);
       const lines = [
         `🧁 *SUGAR RUSH* — ${o.cliente} (${o.id})`,
+        `🕒 ${formatLocalTimestamp(o.timestamp_creacion)}`,
         o.tipo_pedido === "Programado" ? `⏰ Entrega: ${o.hora_programada}` : `⚡ Pedido al momento`,
         ...items.map((it, idx) => `${idx + 1}) ${it.name} ($${it.price})\n   ${formatItemRequirements(it)}`),
         `💰 Total: $${o.total} (${o.metodo_pago})`
@@ -956,6 +995,97 @@
 
       document.getElementById("top-items").innerHTML = formatTop(prodCounts);
       document.getElementById("top-extras").innerHTML = formatTop(extraCounts);
+      updateReportPreview();
+    }
+
+    function buildSalesReportText() {
+      const validOrders = state.orders.filter(o => o.estado !== "Cancelado");
+      const ingresos = validOrders.reduce((s, o) => s + Number(o.total || 0), 0);
+      const egresos = state.expenses.reduce((s, e) => s + Number(e.monto || 0), 0);
+      const neto = ingresos - egresos;
+
+      const porMetodo = {};
+      validOrders.forEach(o => {
+        const m = o.metodo_pago || "Otro";
+        porMetodo[m] = (porMetodo[m] || 0) + Number(o.total || 0);
+      });
+
+      const prodCounts = {};
+      const extraCounts = {};
+      validOrders.forEach(o => {
+        const items = getOrderItems(o);
+        items.forEach(i => {
+          prodCounts[i.name] = (prodCounts[i.name] || 0) + 1;
+          [...(i.untables || []), ...(i.toppings || []), ...(i.special || [])].forEach(ex => {
+            extraCounts[ex] = (extraCounts[ex] || 0) + 1;
+          });
+        });
+      });
+
+      const topProd = Object.entries(prodCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([k, v]) => `• ${k}: ${v}`).join("\n") || "• Sin ventas aún";
+      const topExt = Object.entries(extraCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([k, v]) => `• ${k}: ${v}`).join("\n") || "• Sin extras aún";
+      const metodosTxt = Object.entries(porMetodo)
+        .map(([k, v]) => `• ${k}: $${v}`).join("\n") || "• Sin cobros aún";
+
+      const hoyCDMX = new Date().toLocaleDateString("es-MX", { timeZone: "America/Mexico_City" });
+
+      return [
+        `🧁 *REPORTE SUGAR RUSH* (${hoyCDMX})`,
+        `Pedidos válidos: ${validOrders.length}`,
+        `Ingresos: $${ingresos} | Egresos: $${egresos} | Neto: $${neto}`,
+        ``,
+        `💳 *Por método de pago:*`,
+        metodosTxt,
+        ``,
+        `🏆 *Más pedidos:*`,
+        topProd,
+        ``,
+        `🍓 *Toppings / Untables top:*`,
+        topExt
+      ].join("\n");
+    }
+
+    function updateReportPreview() {
+      const el = document.getElementById("report-preview");
+      if (el) el.textContent = buildSalesReportText();
+    }
+
+    function copySalesReport() {
+      navigator.clipboard?.writeText(buildSalesReportText());
+      alert("Reporte copiado 📋");
+    }
+
+    function exportSalesCSV() {
+      const headers = [
+        "ID_Comanda", "Fecha_Creacion_CDMX", "Fecha_Entrega_CDMX", "Tipo", "Hora_Programada",
+        "Cliente", "Resumen", "Anticipo", "Total", "Metodo_Pago", "Estado"
+      ];
+      const rows = state.orders.map(o => [
+        o.id,
+        formatLocalTimestamp(o.timestamp_creacion),
+        formatLocalTimestamp(o.timestamp_entrega),
+        o.tipo_pedido || "Inmediato",
+        o.hora_programada || "",
+        o.cliente || "",
+        o.resumen || "",
+        o.anticipo ?? 0,
+        o.total ?? 0,
+        o.metodo_pago || "",
+        o.estado || ""
+      ]);
+      const escapeCSV = val => `"${String(val ?? "").replace(/"/g, '""')}"`;
+      const csvContent = "\uFEFF" + [headers, ...rows].map(r => r.map(escapeCSV).join(",")).join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sugar-rush-ventas-${new Date().toLocaleDateString("sv-SE", { timeZone: "America/Mexico_City" })}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
 
     function switchTab(tab) {
@@ -975,10 +1105,10 @@
         await fetch(SCRIPT_URL, {
           method: "POST",
           mode: "no-cors",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
           body: JSON.stringify({ token: TOKEN, ...payload })
         });
-        statusEl.textContent = "💖 Respaldado";
+        statusEl.textContent = "💖 Guardado";
       } catch {
         statusEl.textContent = "⚠️ Local";
       }
@@ -987,9 +1117,9 @@
     async function pullFromSheets() {
       if (!SCRIPT_URL.startsWith("https://")) return;
       const statusEl = document.getElementById("sync-status");
-      statusEl.textContent = "↻ Cargando...";
+      statusEl.textContent = "↻ Sincronizando...";
       try {
-        const res = await fetch(`${SCRIPT_URL}?token=${TOKEN}`);
+        const res = await fetch(`${SCRIPT_URL}?token=${TOKEN}&t=${Date.now()}`);
         const data = await res.json();
         if (data.status === "ok") {
           state.orders = (data.comandas || []).reverse().map(c => ({
@@ -1029,7 +1159,10 @@
     renderOrders();
     renderStats();
     pullFromSheets();
-    setInterval(renderOrders, 30000);
+    setInterval(() => {
+      renderOrders();
+      pullFromSheets();
+    }, 15000);
   </script>
 </body>
 </html>
