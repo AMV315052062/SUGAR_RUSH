@@ -189,6 +189,7 @@
     .primary-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--navy); }
 
     .mint-btn { background: var(--mint); color: var(--navy); }
+    .waffle-btn { background: var(--waffle); color: var(--navy); }
 
     .secondary-btn {
       padding: 6px 11px;
@@ -462,8 +463,24 @@
     <!-- VISTA 3: CORTE, EGRESOS Y MÉTRICAS -->
     <section id="view-stats" class="hidden">
       <div class="panel">
-        <strong style="font-family:'Fredoka',sans-serif;font-size:1.05rem;">💖 Resumen Histórico y del Día</strong>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong style="font-family:'Fredoka',sans-serif;font-size:1.05rem;">💖 Resumen Histórico</strong>
+          <button class="secondary-btn" onclick="runDailyCut()">✂️ Corte del Día</button>
+        </div>
         <div class="stat-grid" id="metrics-summary"></div>
+      </div>
+
+      <div id="daily-cut-panel" class="panel hidden" style="background:var(--waffle-soft);">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong style="font-family:'Fredoka',sans-serif;font-size:1.05rem;">✂️ Corte del Día</strong>
+          <button class="secondary-btn" onclick="closeDailyCut()">✕</button>
+        </div>
+        <pre id="daily-cut-text" style="margin-top:10px;background:#fff;border:2px solid var(--navy);border-radius:14px;padding:10px;font-family:'Quicksand',sans-serif;font-size:0.82rem;white-space:pre-wrap;color:var(--navy);"></pre>
+        <div class="row">
+          <button class="secondary-btn" style="flex:1;padding:10px;" onclick="copyDailyCut()">📋 Copiar Corte</button>
+          <button class="primary-btn mint-btn" style="flex:1;margin-top:0;padding:10px;" onclick="exportSalesCSV()">⬇️ CSV</button>
+        </div>
+        <button class="primary-btn waffle-btn" style="margin-top:8px;padding:10px;" onclick="archiveDayLocal()">🧹 Cerrar Turno (Limpiar vista local)</button>
       </div>
 
       <div class="panel">
@@ -558,6 +575,12 @@
 
     let activeModalOrderId = null;
 
+    function getLocalDateKey(isoStr) {
+      const d = isoStr ? new Date(isoStr) : new Date();
+      if (isNaN(d.getTime())) return "";
+      return d.toLocaleDateString("sv-SE", { timeZone: "America/Mexico_City" });
+    }
+
     function formatLocalTimestamp(isoStr) {
       if (!isoStr) return "";
       const d = new Date(isoStr);
@@ -584,6 +607,20 @@
         minute: "2-digit",
         hour12: true
       });
+    }
+
+    function getNextConsecutiveId() {
+      let maxNum = 0;
+      state.orders.forEach(o => {
+        const match = String(o.id || "").match(/(\d+)$/);
+        if (match) {
+          const n = parseInt(match[1], 10);
+          if (!isNaN(n) && n < 100000 && n > maxNum) {
+            maxNum = n;
+          }
+        }
+      });
+      return "SR-" + String(maxNum + 1).padStart(3, "0");
     }
 
     function saveLocal() {
@@ -755,7 +792,7 @@
       }).join(" · ");
 
       const order = {
-        id: "SR-" + Date.now().toString().slice(-5),
+        id: getNextConsecutiveId(),
         timestamp_creacion: new Date().toISOString(),
         timestamp_entrega: "",
         tipo_pedido: state.mode,
@@ -996,6 +1033,65 @@
       document.getElementById("top-items").innerHTML = formatTop(prodCounts);
       document.getElementById("top-extras").innerHTML = formatTop(extraCounts);
       updateReportPreview();
+    }
+
+    function buildDailyCutText() {
+      const todayKey = getLocalDateKey();
+      const todayOrders = state.orders.filter(o => o.estado !== "Cancelado" && getLocalDateKey(o.timestamp_creacion) === todayKey);
+      const todayExpenses = state.expenses.filter(e => getLocalDateKey(e.timestamp) === todayKey);
+
+      const ingresos = todayOrders.reduce((s, o) => s + Number(o.total || 0), 0);
+      const egresos = todayExpenses.reduce((s, e) => s + Number(e.monto || 0), 0);
+      const neto = ingresos - egresos;
+      const entregados = todayOrders.filter(o => o.estado === "Entregado").length;
+      const abiertos = todayOrders.filter(o => o.estado !== "Entregado").length;
+
+      const porMetodo = {};
+      todayOrders.forEach(o => {
+        const m = o.metodo_pago || "Otro";
+        porMetodo[m] = (porMetodo[m] || 0) + Number(o.total || 0);
+      });
+
+      const metodosTxt = Object.entries(porMetodo)
+        .map(([k, v]) => `• ${k}: $${v}`).join("\n") || "• Sin ventas hoy";
+
+      const hoyFmt = new Date().toLocaleDateString("es-MX", { timeZone: "America/Mexico_City" });
+
+      return [
+        `✂️ *CORTE DEL DÍA — SUGAR RUSH* (${hoyFmt})`,
+        `Órdenes de hoy: ${todayOrders.length} (${entregados} entregadas / ${abiertos} abiertas)`,
+        `Ingresos hoy: $${ingresos}`,
+        `Egresos hoy: $${egresos}`,
+        `Balance neto del día: $${neto}`,
+        ``,
+        `💳 *Cobros por método:*`,
+        metodosTxt
+      ].join("\n");
+    }
+
+    function runDailyCut() {
+      document.getElementById("daily-cut-text").textContent = buildDailyCutText();
+      document.getElementById("daily-cut-panel").classList.remove("hidden");
+    }
+
+    function closeDailyCut() {
+      document.getElementById("daily-cut-panel").classList.add("hidden");
+    }
+
+    function copyDailyCut() {
+      navigator.clipboard?.writeText(buildDailyCutText());
+      alert("Corte del día copiado 📋");
+    }
+
+    function archiveDayLocal() {
+      if (!confirm("¿Cerrar turno y limpiar órdenes/egresos locales de hoy? (El histórico en Google Sheets se conserva)")) return;
+      const todayKey = getLocalDateKey();
+      state.orders = state.orders.filter(o => getLocalDateKey(o.timestamp_creacion) !== todayKey);
+      state.expenses = state.expenses.filter(e => getLocalDateKey(e.timestamp) !== todayKey);
+      saveLocal();
+      renderOrders();
+      renderStats();
+      closeDailyCut();
     }
 
     function buildSalesReportText() {
